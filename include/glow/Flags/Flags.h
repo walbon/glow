@@ -155,9 +155,8 @@ namespace glow {
 namespace runtime {
 namespace flags {
 extern unsigned CPUMemory;
-
+extern unsigned NMPMemory;
 extern unsigned HabanaMemory;
-
 extern unsigned NNPIMemory;
 extern unsigned NNPITimeoutMs;
 
