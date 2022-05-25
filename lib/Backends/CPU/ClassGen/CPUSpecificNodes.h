@@ -35,4 +35,16 @@ BB.newBackendSpecificNode("CPUConvDKKC8")
 
 BB.includeBackendSpecificVerification("glow/CPUSpecificNodesVerification.h");
 
+// Adding new backend for MO436-features and use the specific convolution
+// implementation.
+BB.newBackendSpecificNode("CPUConvMO436Features")
+    .addInput("Input")
+    .addInput("Filter")
+    .addInput("Bias")
+    .addMember(MemberType::VectorUnsigned, "Kernels")
+    .addMember(MemberType::VectorUnsigned, "Strides")
+    .addMember(MemberType::VectorUnsigned, "Pads")
+    .addResultFromCtorArg()
+    .setDocstring("This is a cpu-specific convolution implementation where MO436 takes somes advantages.");
+
 #endif // GLOW_WITH_CPU

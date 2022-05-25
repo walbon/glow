@@ -253,48 +253,52 @@ void libjit_convDKKC8_foreach_xy_pixels_filter(
 } // namespace
 
 extern "C" {
-void libjit_convDKKC8_f(float *outW, const float *inW, const float *filterW,
+void libjit_convMO436Features_f(float *outW, const float *inW, const float *filterW,
                         const float *biasW, const dim_t *outWdims,
                         const dim_t *inWdims, const dim_t *filterWdims,
                         const dim_t *biasWdims, const dim_t *kernelSizes,
-                        const dim_t *strides, const dim_t *pads, dim_t group,
-                        unsigned pixelScanFirst, unsigned numDepthRegs,
-                        unsigned sizeGroupY, unsigned depthStrips) {
-  dim_t inChannels = inWdims[3];
-  dim_t outChannels = outWdims[3];
-  dim_t inCperG = inChannels / group;
-  dim_t outCperG = outChannels / group;
-
-  // Select the order in which we iterate over the pixels in the picture.
-  auto eachPixelConv =
-      (pixelScanFirst ? &libjit_convDKKC8_foreach_xy_pixels_filter
-                      : &libjit_convDKKC8_foreach_xy_filter_pixels);
-
+                        const dim_t *strides, const dim_t *pads) {
+// Remembering  NHWC
+  dim_t pad_t = pads[0];
+  dim_t pad_l = pads[1];
+  dim_t stride_h = strides[0];
+  dim_t stride_w = strides[1];
+  dim_t kernel_h = kernelSizes[0];
+  dim_t kernel_w = kernelSizes[1];
+  auto sum = 0.0;
   // For each input in the batch:
   for (dim_t n = 0; n < inWdims[0]; n++) {
-
-    // Initialize the output frame for the N'th slice with the bias.
-    // Later we will accumulate values into this slice.
+    // Fill the pads
     libjit_conv_init_output_with_bias(n, outW, biasW, outWdims, biasWdims);
 
-    // For each group of input channels:
-    for (dim_t g = 0; g < group; g++) {
-
-      // For each output channel, process [numDepthRegs x float8] elements.
-      dim_t startChannelIndex = g * outCperG;
-      dim_t endChannelIndex = (g + 1) * outCperG;
-      for (dim_t d = startChannelIndex; d < endChannelIndex;
-           d += 8 * numDepthRegs * depthStrips) {
-
-        // Perform the convolution for each pixel.
-        eachPixelConv(n, d, numDepthRegs, depthStrips, sizeGroupY, inCperG,
-                      outW, inW, filterW, biasW, outWdims, inWdims, filterWdims,
-                      biasWdims, kernelSizes, strides, pads, g,
-                      endChannelIndex);
-
-      } // For each D (the depth, or the output channel).
-    }   // for each G, the group
-  }     // For each N, the sample in the batch.
-}
+    for (size_t filter = 0; filter < filterWdims[0]; filter++) {
+      for (size_t outx = 0; outx < outWdims[1]; outx++) {
+        for (size_t outy = 0; outy < outWdims[2]; outy++) {
+          // restart the sum counter
+	  sum = 0;
+          for (size_t ch = 0; ch < inWdims[3]; ch++) {
+            for (size_t fx = 0; fx < kernel_h; fx++) {
+              for (size_t fy = 0; fy < kernel_w; fy++) {
+                auto inX = outx * stride_h - pad_t + fx;
+                auto inY = outy * stride_w - pad_l + fy;
+                // Thanks extra class! :) // Avoiding out of matrizes edges
+                if (inX < 0 || inY < 0 || inX >= (sdim_t)inWdims[1] ||
+                    inY >= (sdim_t)inWdims[2]) {
+                  continue;
+                }
+                auto inIdx = libjit_getXYZW(inWdims, n, inX, inY, ch);
+                auto filterIdx =
+                    libjit_getXYZW(filterWdims, filter, fx, fy, ch);
+                sum += inW[inIdx] * filterW[filterIdx];
+              }
+            }
+          }
+          auto outIdx = libjit_getXYZW(outWdims, n, outx, outy, filter);
+          outW[outIdx] = outW[outIdx] + sum;
+        }// Output Y
+      }// Output X
+    }// Filters
+  } //Batches
+}//Function
 
 } // extern "C"

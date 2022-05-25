@@ -23,6 +23,31 @@ using namespace glow;
 using llvm::dyn_cast;
 using llvm::isa;
 
+static Node *_MO436Conv(ConvolutionNode *CN, Function *F) {
+  // Fused activation not supported for this replacement.
+  if (CN->hasFusedActivation()) {
+    return nullptr;
+  }
+  // Deep-wise convolution not supported for this replacement
+  if (CN->getGroup() !=1)  {
+    return nullptr;
+  }
+  // We only support Floats for now.
+  if (CN->getFilter().getElementType() != ElemKind::FloatTy) {
+    return nullptr;
+  }
+  return F->addNode(new CPUConvMO436FeaturesNode(
+      CN->getName(),
+      CN->getResult().getType(),
+      CN->getInput(),
+      CN->getFilter(),
+      CN->getBias(),
+      CN->getKernels(),
+      CN->getStrides(),
+      CN->getPads()));
+}
+
+
 /// Try to optimize the regular Convolution into a target-specific convolution
 /// with a different filter memory layout. This optimization adds a new kind of
 /// cpu-specific convolution that operates on filter weight data in a
@@ -132,12 +157,19 @@ CPUBackend::transformPostLowering(Function *F, CompilationContext &,
 
   bool changed = false;
   for (auto &node : F->getNodes()) {
-    // Try to replace generic convolution with cpu-optimized version.
     if (auto *CN = dyn_cast<ConvolutionNode>(&node)) {
-      if (Node *NCN = optimizeCPUConv(CN, F)) {
-        CN->getResult().replaceAllUsesOfWith(NCN);
-        changed = true;
-        continue;
+      if (enableMO436Features) {
+        if (Node *NC = _MO436Conv(CN, F)) {
+          CN->getResult().replaceAllUsesOfWith(NC);
+          changed = true;
+          continue;
+        }
+      } else {
+        if (Node *NCN = optimizeCPUConv(CN, F)) {
+          CN->getResult().replaceAllUsesOfWith(NCN);
+          changed = true;
+          continue;
+        }
       }
     }
 

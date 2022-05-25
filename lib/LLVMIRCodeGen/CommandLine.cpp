@@ -125,3 +125,12 @@ llvm::cl::list<std::string> bundleObjectsOpt(
                    "should be archived into the bundle. The object files are "
                    "pre registered during Glow build. "),
     llvm::cl::CommaSeparated, llvm::cl::ZeroOrMore);
+
+// treatment of MO436Features
+llvm::cl::opt<bool> enableMO436Features(
+    "MO436Features",
+    llvm::cl::desc("Enable the MO436 feature. This is a feature developed for "
+                   "the discipline MO436."),
+    llvm::cl::init(false),
+    llvm::cl::cat(bundleSaverCat));
+

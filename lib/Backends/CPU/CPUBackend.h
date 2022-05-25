@@ -25,6 +25,8 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/IR/IRBuilder.h"
 
+#include "glow/LLVMIRCodeGen/CommandLine.h"
+
 #include <vector>
 
 namespace glow {

@@ -34,3 +34,14 @@ Error ONNXModelWriter::writeCPUConvDKKC8(const CPUConvDKKC8Node *node,
 
   return writeAllWithNode("CPUConvDKKC8", node, graph, proto);
 }
+
+Error ONNXModelWriter::writeCPUConvMO436Features(const CPUConvMO436FeaturesNode *node,
+                                         GraphType &graph) {
+  auto *proto = graph.add_node();
+  // Add dictionary entries.
+  addValueAttribute(proto, "kernel_shape", node->getKernels());
+  addValueAttribute(proto, "strides", node->getStrides());
+  addValueAttribute(proto, "pads", node->getPads());
+
+  return writeAllWithNode("CPUConvMO436Features", node, graph, proto);
+}

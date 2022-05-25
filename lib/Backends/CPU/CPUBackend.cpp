@@ -62,6 +62,9 @@ bool CPUBackend::isOpSupported(const NodeInfo &NI) const {
   case Kinded::Kind::CPUConvDKKC8NodeKind:
     return NI.allInputsAndOutputsHaveSameElemKind({ElemKind::FloatTy});
 
+  case Kinded::Kind::CPUConvMO436FeaturesNodeKind:
+    return NI.allInputsAndOutputsHaveSameElemKind({ElemKind::FloatTy});
+
   // Delegate everything else to the LLVM backend.
   default:
     return LLVMBackend::isOpSupported(NI);
@@ -90,6 +93,10 @@ bool CPUBackend::supportsFusedActivation(Node *parent, Node *activation) const {
       !llvm::isa<ChannelwiseQuantizedConvolutionNode>(parent)) {
     return false;
   }
+
+  // Disabling Fusion activation for Convolution when enableMO436Feature is enabled
+  if (llvm::isa<ConvolutionNode>(parent) && enableMO436Features)
+    return false;
 
   // Only the following activations can be fused.
   // Additionally Tanh/Sigmoid are fused only for floating-point type. For

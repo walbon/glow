@@ -117,6 +117,34 @@ void CPULLVMIRGen::generateLLVMIRForInstr(llvm::IRBuilder<> &builder,
                 depthStripsVal});
     break;
   }
+  case Kinded::Kind::CPUConvMO436FeaturesInstKind: {
+    auto *CI = cast<CPUConvMO436FeaturesInst>(I);
+    auto *dest = CI->getDest();
+    auto *src = CI->getSrc();
+    auto *filter = CI->getFilter();
+    auto *bias = CI->getBias();
+    auto *destPtr = emitValueAddress(builder, dest);
+    auto *srcPtr = emitValueAddress(builder, src);
+    auto *filterPtr = emitValueAddress(builder, filter);
+    auto *biasPtr = emitValueAddress(builder, bias);
+
+    auto *destDims = emitValueDims(builder, dest);
+    auto *srcDims = emitValueDims(builder, src);
+    auto *filterDims = emitValueDims(builder, filter);
+    auto *biasDims = emitValueDims(builder, bias);
+
+    auto *kernels = emitConstDimTArray(builder, CI->getKernels());
+    auto *strides = emitConstDimTArray(builder, CI->getStrides());
+    auto *pads = emitConstDimTArray(builder, CI->getPads());
+
+    const char *kernelName = "convMO436Features";
+    auto *F = getFunction(kernelName, dest->getElementType());
+
+    createCall(builder, F,
+               {destPtr, srcPtr, filterPtr, biasPtr, destDims, srcDims,
+                filterDims, biasDims, kernels, strides, pads});
+    break;
+  }
   default:
     LLVMIRGen::generateLLVMIRForInstr(builder, I);
   }
