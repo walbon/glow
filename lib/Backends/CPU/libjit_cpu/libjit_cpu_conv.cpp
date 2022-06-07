@@ -23,6 +23,7 @@
 #include <sys/types.h>
 
 #include "../../../LLVMIRCodeGen/libjit/libjit_defs.h"
+#include <cblas.h>
 
 namespace {
 // Initialize the convolution output frame for slice \p N with the bias \p
@@ -252,6 +253,69 @@ void libjit_convDKKC8_foreach_xy_pixels_filter(
 
 } // namespace
 
+// Implementation for Im2Col function to be used inside of naive iteration
+static void Im2ColNHWC(
+                const int channels,
+                const int height,
+                const int width,
+                const int kernel_h, // filter height
+                const int kernel_w, // filter width
+                const int dilation_h,
+                const int dilation_w,
+                const int pad_t, // top
+                const int pad_l, // left
+                const int pad_b, // below
+                const int pad_r, // rigth
+                const int stride_h,
+                const int stride_w,
+                const float *data_im,
+                const float *data_col, // output of data
+                //CPUContext ???
+                const int groups
+                //const float zero_point ??
+                )
+  {
+  const int dkernel_h = dilation_h * (kernel_h - 1) + 1;
+  const int dkernel_w = dilation_w * (kernel_w - 1) + 1;
+
+  int height_col = (height + pad_t + pad_b - dkernel_h) / stride_h + 1;
+  int width_col = (width + pad_l + pad_r - dkernel_w) / stride_w + 1;
+
+  for (int h = 0; h < height_col; ++h) {
+    int h_pad = -pad_t + h * stride_h;
+    float *data_col_temp = (float*)data_col + h * width_col * kernel_h * kernel_w * channels;
+    int w_pad = -pad_l;
+    for (int w = 0; w < width_col; w++) {
+      int r = 0;
+      for (int ih = h_pad; ih < h_pad + dkernel_h; ih += dilation_h, ++r) {
+        int s = 0;
+        for (int iw = w_pad; iw < w_pad + dkernel_w; iw += dilation_w, ++s) {
+          if (ih >= 0 && ih < height && iw >= 0 && iw < width) {
+            for (int g = 0; g < groups; g++){
+              memcpy(
+                     data_col_temp + ((g * kernel_h + r) * kernel_w + s) * (channels / groups),
+                     data_im + (ih * width + iw) * channels +
+                      g * (channels / groups),
+                  sizeof(float) * (channels / groups));
+            }
+          } else {
+            // This should be simply padded with zero.
+            for (int g = 0; g < groups; g++) {
+              for (int i = 0; i < channels / groups; ++i) {
+                data_col_temp[(((g * kernel_h + r) * kernel_w) + s) * (channels / groups) + i] = 0.0;
+              }
+            }
+          }
+        } // for each iw
+      } // for each ih
+      data_col_temp += kernel_h * kernel_w * channels;
+      w_pad += stride_w;
+    } // for each output pixel
+  } // for each image row
+} // END
+
+
+
 extern "C" {
 void libjit_convMO436Features_f(float *outW, const float *inW, const float *filterW,
                         const float *biasW, const dim_t *outWdims,
@@ -261,44 +325,53 @@ void libjit_convMO436Features_f(float *outW, const float *inW, const float *filt
 // Remembering  NHWC
   dim_t pad_t = pads[0];
   dim_t pad_l = pads[1];
+  dim_t pad_b = pads[2];
+  dim_t pad_r = pads[3];
   dim_t stride_h = strides[0];
   dim_t stride_w = strides[1];
   dim_t kernel_h = kernelSizes[0];
   dim_t kernel_w = kernelSizes[1];
-  auto sum = 0.0;
+
+  int M = filterWdims[0];
+
+  int K = outWdims[1] * outWdims[2];
+  int kernel_size = kernel_h * kernel_w * inWdims[3];  // Filter size
+  int output_size = M * K;
+  int input_size = inWdims[1] * inWdims[2] * inWdims[3];
+
+  float *data_col = (float *)malloc(sizeof(float) * K * kernel_size);
+
   // For each input in the batch:
   for (dim_t n = 0; n < inWdims[0]; n++) {
     // Fill the pads
     libjit_conv_init_output_with_bias(n, outW, biasW, outWdims, biasWdims);
 
-    for (size_t filter = 0; filter < filterWdims[0]; filter++) {
-      for (size_t outx = 0; outx < outWdims[1]; outx++) {
-        for (size_t outy = 0; outy < outWdims[2]; outy++) {
-          // restart the sum counter
-	  sum = 0;
-          for (size_t ch = 0; ch < inWdims[3]; ch++) {
-            for (size_t fx = 0; fx < kernel_h; fx++) {
-              for (size_t fy = 0; fy < kernel_w; fy++) {
-                auto inX = outx * stride_h - pad_t + fx;
-                auto inY = outy * stride_w - pad_l + fy;
-                // Thanks extra class! :) // Avoiding out of matrizes edges
-                if (inX < 0 || inY < 0 || inX >= (sdim_t)inWdims[1] ||
-                    inY >= (sdim_t)inWdims[2]) {
-                  continue;
-                }
-                auto inIdx = libjit_getXYZW(inWdims, n, inX, inY, ch);
-                auto filterIdx =
-                    libjit_getXYZW(filterWdims, filter, fx, fy, ch);
-                sum += inW[inIdx] * filterW[filterIdx];
-              }
-            }
-          }
-          auto outIdx = libjit_getXYZW(outWdims, n, outx, outy, filter);
-          outW[outIdx] = outW[outIdx] + sum;
-        }// Output Y
-      }// Output X
-    }// Filters
+    const float *pin = inW + n * input_size;
+    float *pout = outW + n * output_size;
+
+    Im2ColNHWC(inWdims[3], inWdims[1], inWdims[2], kernel_h, kernel_w, 1, 1, pad_t,
+               pad_l, pad_b, pad_r, stride_h, stride_w, pin, data_col, 1);
+
+   // C:= alpha*op(A)*op(B) + beta*C
+   // LDA = LDB = LDC : Indicates the number of columns
+    cblas_sgemm(CblasRowMajor,     // Method to process the matrixes(linha por coluna)
+                CblasNoTrans,      // dispose of Matrix A No Transpose
+                CblasTrans,        // dispose of Matrix B Transpose
+                K,
+                M,                 // Indicates the number of rows of A.
+                kernel_size,       // LDA
+                1.0,               // Alpha
+                data_col,          // Matrix A pointer
+                kernel_size,       // LDB
+                filterW,           // Matrix B pointer
+                kernel_size,       // LDC
+                1.0,               // Beta
+                pout,              // Matrix C pointer
+                M);                // Indicates the number of rows of C.
+
+    free(data_col);
   } //Batches
 }//Function
 
 } // extern "C"
+
